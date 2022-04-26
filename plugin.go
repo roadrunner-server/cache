@@ -13,6 +13,8 @@ import (
 	"github.com/roadrunner-server/cache/v2/directives"
 	endure "github.com/roadrunner-server/endure/pkg/container"
 	"github.com/roadrunner-server/errors"
+	"github.com/roadrunner-server/sdk/v2/utils"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -108,6 +110,13 @@ func (p *Plugin) CollectCaches(name endure.Named, cache cache.HTTPCacheFromConfi
 
 func (p *Plugin) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if val, ok := r.Context().Value(utils.OtelTracerNameKey).(string); ok {
+			tp := trace.SpanFromContext(r.Context()).TracerProvider()
+			ctx, span := tp.Tracer(val).Start(r.Context(), name)
+			defer span.End()
+			r = r.WithContext(ctx)
+		}
+
 		// https://datatracker.ietf.org/doc/html/rfc7234#section-3.2
 		/*
 			we MUST NOT use a cached response to a request with an Authorization header field
