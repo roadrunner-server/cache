@@ -9,11 +9,11 @@ import (
 
 	"github.com/roadrunner-server/api/v2/plugins/cache"
 	"github.com/roadrunner-server/api/v2/plugins/config"
-	cacheV1beta "github.com/roadrunner-server/api/v2/proto/cache/v1beta"
 	"github.com/roadrunner-server/cache/v2/directives"
 	endure "github.com/roadrunner-server/endure/pkg/container"
 	"github.com/roadrunner-server/errors"
 	"github.com/roadrunner-server/sdk/v2/utils"
+	cacheV1beta "go.buf.build/protocolbuffers/go/roadrunner-server/api/proto/cache/v1beta"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
