@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/roadrunner-server/api/v2 v2.17.0
-	github.com/roadrunner-server/endure v1.2.3
+	github.com/roadrunner-server/endure v1.3.0
 	github.com/roadrunner-server/errors v1.1.2
 	github.com/roadrunner-server/sdk/v2 v2.14.0
 	github.com/stretchr/testify v1.7.1
@@ -22,5 +22,5 @@ require (
 	go.opentelemetry.io/otel v1.7.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.8.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	gopkg.in/yaml.v3 v3.0.0-20220512140231-539c8e751b99 // indirect
 )
