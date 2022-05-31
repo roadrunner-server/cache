@@ -53,7 +53,7 @@ func (r *Req) Reset() {
 func ParseRequestCacheControl(directives string, log *zap.Logger, r *Req) { //nolint:gocyclo
 	split := strings.Split(directives, ",")
 
-	// a lot of allocations here - 14 todo(rustatian): FIXME
+	// a lot of allocations here - 4 todo(rustatian): FIXME
 	for i := 0; i < len(split); i++ {
 		// max-age, max-stale, min-fresh
 		if idx := strings.IndexByte(split[i], '='); idx != -1 {
@@ -97,6 +97,7 @@ func ParseRequestCacheControl(directives string, log *zap.Logger, r *Req) { //no
 			continue
 		}
 
+		// single tokens
 		token := strings.Trim(split[i], " ")
 
 		switch token {

@@ -61,6 +61,7 @@ func TestParseRequest(t *testing.T) {
 }
 
 // BenchmarkParseRequest-32    	 2172706	       542.6 ns/op	     376 B/op	      14 allocs/op
+// BenchmarkParseRequest-24    	 4333123	       294.1 ns/op	     136 B/op	       4 allocs/op
 // BAD, should not be allocations in that function. TODO(rustatian): rewrite with own lexer and tokenizer.
 func BenchmarkParseRequest(b *testing.B) {
 	cc := "max-age=100, max-stale=100, min-fresh=100, no-cache, no-transform, no-store, only-if-cached"

@@ -66,17 +66,20 @@ func (p *Plugin) Init(cfg config.Configurer, log *zap.Logger) error {
 		},
 	}
 
-	p.rspPool = sync.Pool{New: func() interface{} {
-		return &cacheV1beta.Response{}
-	}}
+	p.rspPool = sync.Pool{
+		New: func() interface{} {
+			return &cacheV1beta.Response{}
+		},
+	}
 
-	p.rqPool = sync.Pool{New: func() interface{} {
-		return &directives.Req{}
-	}}
+	p.rqPool = sync.Pool{
+		New: func() interface{} {
+			return &directives.Req{}
+		},
+	}
 
-	l := new(zap.Logger)
-	*l = *log
-	p.log = l
+	p.log = new(zap.Logger)
+	*p.log = *log
 	p.collectedCaches = make(map[string]cache.HTTPCacheFromConfig, 1)
 
 	return nil
@@ -117,8 +120,8 @@ func (p *Plugin) Middleware(next http.Handler) http.Handler {
 			r = r.WithContext(ctx)
 		}
 
-		// https://datatracker.ietf.org/doc/html/rfc7234#section-3.2
 		/*
+			https://www.cloudflare.com/en-gb/learning/access-management/what-is-mutual-tls/
 			we MUST NOT use a cached response to a request with an Authorization header field
 		*/
 		if w.Header().Get(auth) != "" {
@@ -134,6 +137,10 @@ func (p *Plugin) Middleware(next http.Handler) http.Handler {
 		cc = strings.ReplaceAll(cc, "\n", "")
 		cc = strings.ReplaceAll(cc, "\r", "")
 
+		/*
+		   Cache-Control   = 1#cache-directive
+		   cache-directive = token [ "=" ( token / quoted-string ) ]
+		*/
 		directives.ParseRequestCacheControl(cc, p.log, rq)
 		// https://datatracker.ietf.org/doc/html/rfc7234#section-5.2.1.5
 		/*
