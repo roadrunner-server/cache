@@ -2,18 +2,18 @@ package cache
 
 import (
 	"fmt"
-	"hash/fnv"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/roadrunner-server/api/v2/plugins/cache"
 	"github.com/roadrunner-server/api/v2/plugins/config"
 	"github.com/roadrunner-server/cache/v2/directives"
+	"github.com/roadrunner-server/cache/v2/headers"
+	"github.com/roadrunner-server/cache/v2/requests"
+	"github.com/roadrunner-server/cache/v2/storage"
 	endure "github.com/roadrunner-server/endure/pkg/container"
 	"github.com/roadrunner-server/errors"
 	"github.com/roadrunner-server/sdk/v2/utils"
-	cacheV1beta "go.buf.build/protocolbuffers/go/roadrunner-server/api/proto/cache/v1beta"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
@@ -24,10 +24,7 @@ const (
 )
 
 type Plugin struct {
-	hashPool    sync.Pool
-	writersPool sync.Pool
-	rspPool     sync.Pool
-	rqPool      sync.Pool
+	rh *requests.Requests
 
 	log             *zap.Logger
 	cfg             *Config
@@ -50,34 +47,6 @@ func (p *Plugin) Init(cfg config.Configurer, log *zap.Logger) error {
 	// init default config values
 	p.cfg.InitDefaults()
 
-	p.hashPool = sync.Pool{
-		New: func() interface{} {
-			return fnv.New64a()
-		},
-	}
-
-	p.writersPool = sync.Pool{
-		New: func() interface{} {
-			wr := new(writer)
-			wr.Code = -1
-			wr.Data = nil
-			wr.HdrToSend = make(map[string][]string, 10)
-			return wr
-		},
-	}
-
-	p.rspPool = sync.Pool{
-		New: func() interface{} {
-			return &cacheV1beta.Response{}
-		},
-	}
-
-	p.rqPool = sync.Pool{
-		New: func() interface{} {
-			return &directives.Req{}
-		},
-	}
-
 	p.log = new(zap.Logger)
 	*p.log = *log
 	p.collectedCaches = make(map[string]cache.HTTPCacheFromConfig, 1)
@@ -92,6 +61,8 @@ func (p *Plugin) Serve() chan error {
 		p.cache, _ = p.collectedCaches[p.cfg.Driver].FromConfig(p.log)
 		return errCh
 	}
+
+	p.rh = requests.NewRequestsHandler(nil, storage.NewStorage(), p.log)
 
 	errCh <- errors.E("no cache drivers registered")
 	return errCh
@@ -124,30 +95,30 @@ func (p *Plugin) Middleware(next http.Handler) http.Handler {
 			https://www.cloudflare.com/en-gb/learning/access-management/what-is-mutual-tls/
 			we MUST NOT use a cached response to a request with an Authorization header field
 		*/
-		if w.Header().Get(auth) != "" {
+		if w.Header().Get(headers.Auth) != "" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		rq := p.getRq()
-		defer p.putRq(rq)
+		cc := p.rh.GetCC()
+		defer p.rh.PutCC(cc)
 
 		// cwe-117
-		cc := r.Header.Get(cacheControl)
-		cc = strings.ReplaceAll(cc, "\n", "")
-		cc = strings.ReplaceAll(cc, "\r", "")
+		cch := r.Header.Get(headers.CacheControl)
+		cch = strings.ReplaceAll(cch, "\n", "")
+		cch = strings.ReplaceAll(cch, "\r", "")
 
 		/*
 		   Cache-Control   = 1#cache-directive
 		   cache-directive = token [ "=" ( token / quoted-string ) ]
 		*/
-		directives.ParseRequestCacheControl(cc, p.log, rq)
+		directives.ParseRequestCacheControl(cch, p.log, cc)
 		// https://datatracker.ietf.org/doc/html/rfc7234#section-5.2.1.5
 		/*
 			The "no-store" request directive indicates that a cache MUST NOT
 			store any part of either this request or any response to it.
 		*/
-		if rq.NoCache {
+		if cc.NoCache {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -158,7 +129,7 @@ func (p *Plugin) Middleware(next http.Handler) http.Handler {
 			cacheable methods: https://www.rfc-editor.org/rfc/rfc7231#section-4.2.3 (GET, HEAD, POST (Responses to POST requests are only cacheable when they include explicit freshness information))
 		*/
 		case http.MethodGet:
-			p.handleGET(w, r, next, rq)
+			p.rh.GET(w, r, next, cc)
 			return
 		case http.MethodHead:
 			// TODO(rustatian): HEAD method is not supported
