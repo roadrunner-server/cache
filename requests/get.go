@@ -63,9 +63,6 @@ func (req *Requests) GET(w http.ResponseWriter, r *http.Request, next http.Handl
 	wr := req.getWriter()
 	defer req.putWriter(wr)
 
-	pld := req.getRsp()
-	defer req.putRsp(pld)
-
 	// write the data to the hash function
 	_, err := h.Write(utils.AsBytes(r.RequestURI))
 	if err != nil {
@@ -83,7 +80,11 @@ func (req *Requests) GET(w http.ResponseWriter, r *http.Request, next http.Handl
 			// send original data to the receiver
 			writeResponse(w, wr)
 			// handle the response (decide to cache or not)
-			req.storage.Write(wr, pld, req.log, req.cache, h.Sum64())
+
+			resp := req.getRsp()
+			defer req.putRsp(resp)
+
+			req.storage.Write(wr, resp, req.log, req.cache, h.Sum64())
 			return
 		}
 
@@ -118,7 +119,11 @@ func (req *Requests) GET(w http.ResponseWriter, r *http.Request, next http.Handl
 			// write response
 			writeResponse(w, wr)
 			// write cache
-			req.storage.Write(wr, pld, req.log, req.cache, h.Sum64())
+
+			resp := req.getRsp()
+			defer req.putRsp(resp)
+
+			req.storage.Write(wr, resp, req.log, req.cache, h.Sum64())
 			return
 		}
 	}
