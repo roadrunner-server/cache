@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/roadrunner-server/api/v2/plugins/cache"
 	"github.com/roadrunner-server/api/v2/plugins/config"
@@ -14,6 +15,10 @@ import (
 	endure "github.com/roadrunner-server/endure/pkg/container"
 	"github.com/roadrunner-server/errors"
 	"github.com/roadrunner-server/sdk/v2/utils"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	jprop "go.opentelemetry.io/contrib/propagators/jaeger"
+	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
@@ -24,12 +29,12 @@ const (
 )
 
 type Plugin struct {
-	rh *requests.Requests
+	rh          *requests.Requests
+	propagators propagation.TextMapPropagator
 
-	log             *zap.Logger
-	cfg             *Config
-	cache           cache.Cache
-	collectedCaches map[string]cache.HTTPCacheFromConfig
+	log   *zap.Logger
+	cfg   *Config
+	cache cache.Cache
 }
 
 func (p *Plugin) Init(cfg config.Configurer, log *zap.Logger) error {
@@ -49,7 +54,8 @@ func (p *Plugin) Init(cfg config.Configurer, log *zap.Logger) error {
 
 	p.log = new(zap.Logger)
 	*p.log = *log
-	p.collectedCaches = make(map[string]cache.HTTPCacheFromConfig, 1)
+
+	p.propagators = propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}, jprop.Jaeger{})
 
 	return nil
 }
@@ -57,14 +63,13 @@ func (p *Plugin) Init(cfg config.Configurer, log *zap.Logger) error {
 func (p *Plugin) Serve() chan error {
 	errCh := make(chan error, 1)
 
-	if _, ok := p.collectedCaches[p.cfg.Driver]; ok {
-		p.cache, _ = p.collectedCaches[p.cfg.Driver].FromConfig(p.log)
+	if p.cache == nil {
+		errCh <- errors.Str("no cache backends registered")
 		return errCh
 	}
 
-	p.rh = requests.NewRequestsHandler(nil, storage.NewStorage(), p.log)
+	p.rh = requests.NewRequestsHandler(p.cache, storage.NewStorage(), p.log)
 
-	errCh <- errors.E("no cache drivers registered")
 	return errCh
 }
 
@@ -74,20 +79,27 @@ func (p *Plugin) Stop() error {
 
 func (p *Plugin) Collects() []interface{} {
 	return []interface{}{
-		p.CollectCaches,
+		p.GetCacheBackend,
 	}
 }
 
-func (p *Plugin) CollectCaches(name endure.Named, cache cache.HTTPCacheFromConfig) {
-	p.collectedCaches[name.Name()] = cache
+func (p *Plugin) GetCacheBackend(_ endure.Named, cache cache.HTTPCacheFromConfig) {
+	var err error
+	p.cache, err = cache.FromConfig(p.log)
+	p.log.Error("cache construct", zap.Error(err))
 }
 
 func (p *Plugin) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if val, ok := r.Context().Value(utils.OtelTracerNameKey).(string); ok {
 			tp := trace.SpanFromContext(r.Context()).TracerProvider()
-			ctx, span := tp.Tracer(val).Start(r.Context(), name)
+			ctx, span := tp.Tracer(val, trace.WithSchemaURL(semconv.SchemaURL),
+				trace.WithInstrumentationVersion(otelhttp.SemVersion())).
+				Start(r.Context(), name, trace.WithSpanKind(trace.SpanKindServer))
 			defer span.End()
+
+			// inject
+			p.propagators.Inject(ctx, propagation.HeaderCarrier(r.Header))
 			r = r.WithContext(ctx)
 		}
 
@@ -99,6 +111,8 @@ func (p *Plugin) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+
+		start := time.Now()
 
 		cc := p.rh.GetCC()
 		defer p.rh.PutCC(cc)
@@ -129,14 +143,12 @@ func (p *Plugin) Middleware(next http.Handler) http.Handler {
 			cacheable methods: https://www.rfc-editor.org/rfc/rfc7231#section-4.2.3 (GET, HEAD, POST (Responses to POST requests are only cacheable when they include explicit freshness information))
 		*/
 		case http.MethodGet:
-			p.rh.GET(w, r, next, cc)
+			p.rh.GET(w, r, next, cc, start)
 			return
 		case http.MethodHead:
-			// TODO(rustatian): HEAD method is not supported
-			fallthrough
+			next.ServeHTTP(w, r)
 		case http.MethodPost:
-			// TODO(rustatian): POST method is not supported
-			fallthrough
+			next.ServeHTTP(w, r)
 		default:
 			// passthrough request to the worker for other methods
 			next.ServeHTTP(w, r)

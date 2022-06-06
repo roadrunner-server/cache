@@ -23,3 +23,7 @@ func (w *Writer) Write(b []byte) (int, error) {
 func (w *Writer) Header() http.Header {
 	return w.HdrToSend
 }
+
+func (w *Writer) Flush() {
+
+}

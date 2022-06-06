@@ -26,13 +26,13 @@ func NewStorage() *Storage {
 	}
 }
 
-func (s *Storage) Write(wr *writer.Writer, payload *cacheV1beta.Response, log *zap.Logger, cache cache.Cache, id uint64) {
+func (s *Storage) Write(wr *writer.Writer, log *zap.Logger, cache cache.Cache, id uint64, start time.Time) {
 	/*
 		First - check the status code, should be only 200, 203, 204, 206, 300, 301, 404, 405, 410, 414, and 501
 	*/
 	switch wr.Code {
 	case http.StatusOK:
-		s.handleGet(wr, payload, log, cache, id)
+		s.storeGet(wr, log, cache, id, start)
 		return
 	case http.StatusNonAuthoritativeInfo:
 	case http.StatusNoContent:
@@ -47,11 +47,16 @@ func (s *Storage) Write(wr *writer.Writer, payload *cacheV1beta.Response, log *z
 	}
 }
 
-func (s *Storage) handleGet(wr *writer.Writer, payload *cacheV1beta.Response, log *zap.Logger, cache cache.Cache, id uint64) {
+func (s *Storage) storeGet(wr *writer.Writer, log *zap.Logger, cache cache.Cache, id uint64, start time.Time) {
+	payload := s.getRsp()
+	defer s.putRsp(payload)
+
 	payload.Headers = make(map[string]*cacheV1beta.HeaderValue, len(wr.HdrToSend))
 	payload.Code = uint64(wr.Code)
 	payload.Data = make([]byte, len(wr.Data))
-	payload.Timestamp = time.Now().Format(time.RFC3339)
+
+	// https://datatracker.ietf.org/doc/html/rfc7234#section-4.2.3
+	payload.Timestamp = start.Format(time.RFC3339)
 	copy(payload.Data, wr.Data)
 
 	for k := range wr.HdrToSend {
@@ -70,4 +75,13 @@ func (s *Storage) handleGet(wr *writer.Writer, payload *cacheV1beta.Response, lo
 	if err != nil {
 		log.Error("failed to write cache", zap.Error(err))
 	}
+}
+
+func (s *Storage) getRsp() *cacheV1beta.Response {
+	return s.rspPool.Get().(*cacheV1beta.Response)
+}
+
+func (s *Storage) putRsp(r *cacheV1beta.Response) {
+	r.Reset()
+	s.rspPool.Put(r)
 }

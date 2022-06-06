@@ -10,6 +10,7 @@ import (
 	"github.com/roadrunner-server/cache/v2/hasher"
 	"github.com/roadrunner-server/cache/v2/headers"
 	"github.com/roadrunner-server/cache/v2/storage"
+	"github.com/roadrunner-server/cache/v2/vary"
 	"github.com/roadrunner-server/cache/v2/writer"
 	"github.com/roadrunner-server/errors"
 	"github.com/roadrunner-server/sdk/v2/utils"
@@ -56,13 +57,15 @@ func NewRequestsHandler(cache cache.Cache, s *storage.Storage, log *zap.Logger) 
 }
 
 // GET https://datatracker.ietf.org/doc/html/rfc7234#section-4
-func (req *Requests) GET(w http.ResponseWriter, r *http.Request, next http.Handler, cc *CacheControl) {
+func (req *Requests) GET(w http.ResponseWriter, r *http.Request, next http.Handler, cc *CacheControl, start time.Time) {
 	h := req.hs.GetHash()
 	defer req.hs.PutHash(h)
 
 	wr := req.getWriter()
 	defer req.putWriter(wr)
 
+	// The presented effective request URI (Section 5.5 of [RFC7230]) and
+	// that of the stored response match
 	// write the data to the hash function
 	_, err := h.Write(utils.AsBytes(r.RequestURI))
 	if err != nil {
@@ -78,13 +81,10 @@ func (req *Requests) GET(w http.ResponseWriter, r *http.Request, next http.Handl
 			// forward the request to the worker
 			next.ServeHTTP(wr, r)
 			// send original data to the receiver
-			writeResponse(w, wr)
+			respond(w, wr)
+
 			// handle the response (decide to cache or not)
-
-			resp := req.getRsp()
-			defer req.putRsp(resp)
-
-			req.storage.Write(wr, resp, req.log, req.cache, h.Sum64())
+			req.storage.Write(wr, req.log, req.cache, h.Sum64(), start)
 			return
 		}
 
@@ -117,32 +117,34 @@ func (req *Requests) GET(w http.ResponseWriter, r *http.Request, next http.Handl
 			// serve the request
 			next.ServeHTTP(wr, r)
 			// write response
-			writeResponse(w, wr)
+			respond(w, wr)
+
 			// write cache
-
-			resp := req.getRsp()
-			defer req.putRsp(resp)
-
-			req.storage.Write(wr, resp, req.log, req.cache, h.Sum64())
+			req.storage.Write(wr, req.log, req.cache, h.Sum64(), start)
 			return
 		}
 	}
 
-	// write Age header
-	w.Header().Add(headers.Age, fmt.Sprintf("%.0f", ageHdr))
+	// https://datatracker.ietf.org/doc/html/rfc7234#section-4.1
+	// request don't have a Vary headers OR all Headers are fine
+	if vary.HandleVary(msg, r) {
+		// write Age header
+		w.Header().Add(headers.Age, fmt.Sprintf("%.0f", ageHdr))
 
-	// send original data
-	for k := range msg.Headers {
-		for i := 0; i < len(msg.Headers[k].Value); i++ {
-			w.Header().Add(k, msg.Headers[k].Value[i])
+		// send original data
+		for k := range msg.Headers {
+			for i := 0; i < len(msg.Headers[k].Value); i++ {
+				w.Header().Add(k, msg.Headers[k].Value[i])
+			}
 		}
-	}
 
-	w.WriteHeader(int(msg.Code))
-	_, _ = w.Write(msg.Data)
+		w.WriteHeader(int(msg.Code))
+		_, _ = w.Write(msg.Data)
+		return
+	}
 }
 
-func writeResponse(w http.ResponseWriter, wr *writer.Writer) {
+func respond(w http.ResponseWriter, wr *writer.Writer) {
 	for k := range wr.HdrToSend {
 		for kk := range wr.HdrToSend[k] {
 			w.Header().Add(k, wr.HdrToSend[k][kk])
