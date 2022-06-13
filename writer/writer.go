@@ -1,25 +1,29 @@
-package cache
+package writer
 
 import (
 	"net/http"
 )
 
-type writer struct {
+type Writer struct {
 	Code      int                 `json:"code"`
 	Data      []byte              `json:"data"`
 	HdrToSend map[string][]string `json:"headers"`
 }
 
-func (w *writer) WriteHeader(code int) {
+func (w *Writer) WriteHeader(code int) {
 	w.Code = code
 }
 
-func (w *writer) Write(b []byte) (int, error) {
+func (w *Writer) Write(b []byte) (int, error) {
 	w.Data = make([]byte, len(b))
 	copy(w.Data, b)
 	return len(w.Data), nil
 }
 
-func (w *writer) Header() http.Header {
+func (w *Writer) Header() http.Header {
 	return w.HdrToSend
+}
+
+func (w *Writer) Flush() {
+
 }

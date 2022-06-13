@@ -2,18 +2,23 @@ package cache
 
 import (
 	"fmt"
-	"hash/fnv"
 	"net/http"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/roadrunner-server/api/v2/plugins/cache"
 	"github.com/roadrunner-server/api/v2/plugins/config"
 	"github.com/roadrunner-server/cache/v2/directives"
+	"github.com/roadrunner-server/cache/v2/headers"
+	"github.com/roadrunner-server/cache/v2/requests"
+	"github.com/roadrunner-server/cache/v2/storage"
 	endure "github.com/roadrunner-server/endure/pkg/container"
 	"github.com/roadrunner-server/errors"
 	"github.com/roadrunner-server/sdk/v2/utils"
-	cacheV1beta "go.buf.build/protocolbuffers/go/roadrunner-server/api/proto/cache/v1beta"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	jprop "go.opentelemetry.io/contrib/propagators/jaeger"
+	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
@@ -24,15 +29,12 @@ const (
 )
 
 type Plugin struct {
-	hashPool    sync.Pool
-	writersPool sync.Pool
-	rspPool     sync.Pool
-	rqPool      sync.Pool
+	rh          *requests.Requests
+	propagators propagation.TextMapPropagator
 
-	log             *zap.Logger
-	cfg             *Config
-	cache           cache.Cache
-	collectedCaches map[string]cache.HTTPCacheFromConfig
+	log   *zap.Logger
+	cfg   *Config
+	cache cache.Cache
 }
 
 func (p *Plugin) Init(cfg config.Configurer, log *zap.Logger) error {
@@ -50,34 +52,10 @@ func (p *Plugin) Init(cfg config.Configurer, log *zap.Logger) error {
 	// init default config values
 	p.cfg.InitDefaults()
 
-	p.hashPool = sync.Pool{
-		New: func() interface{} {
-			return fnv.New64a()
-		},
-	}
+	p.log = new(zap.Logger)
+	*p.log = *log
 
-	p.writersPool = sync.Pool{
-		New: func() interface{} {
-			wr := new(writer)
-			wr.Code = -1
-			wr.Data = nil
-			wr.HdrToSend = make(map[string][]string, 10)
-			return wr
-		},
-	}
-
-	p.rspPool = sync.Pool{New: func() interface{} {
-		return &cacheV1beta.Response{}
-	}}
-
-	p.rqPool = sync.Pool{New: func() interface{} {
-		return &directives.Req{}
-	}}
-
-	l := new(zap.Logger)
-	*l = *log
-	p.log = l
-	p.collectedCaches = make(map[string]cache.HTTPCacheFromConfig, 1)
+	p.propagators = propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}, jprop.Jaeger{})
 
 	return nil
 }
@@ -85,12 +63,13 @@ func (p *Plugin) Init(cfg config.Configurer, log *zap.Logger) error {
 func (p *Plugin) Serve() chan error {
 	errCh := make(chan error, 1)
 
-	if _, ok := p.collectedCaches[p.cfg.Driver]; ok {
-		p.cache, _ = p.collectedCaches[p.cfg.Driver].FromConfig(p.log)
+	if p.cache == nil {
+		errCh <- errors.Str("no cache backends registered")
 		return errCh
 	}
 
-	errCh <- errors.E("no cache drivers registered")
+	p.rh = requests.NewRequestsHandler(p.cache, storage.NewStorage(), p.log)
+
 	return errCh
 }
 
@@ -100,47 +79,60 @@ func (p *Plugin) Stop() error {
 
 func (p *Plugin) Collects() []interface{} {
 	return []interface{}{
-		p.CollectCaches,
+		p.GetCacheBackend,
 	}
 }
 
-func (p *Plugin) CollectCaches(name endure.Named, cache cache.HTTPCacheFromConfig) {
-	p.collectedCaches[name.Name()] = cache
+func (p *Plugin) GetCacheBackend(_ endure.Named, cache cache.HTTPCacheFromConfig) {
+	var err error
+	p.cache, err = cache.FromConfig(p.log)
+	p.log.Error("cache construct", zap.Error(err))
 }
 
 func (p *Plugin) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if val, ok := r.Context().Value(utils.OtelTracerNameKey).(string); ok {
 			tp := trace.SpanFromContext(r.Context()).TracerProvider()
-			ctx, span := tp.Tracer(val).Start(r.Context(), name)
+			ctx, span := tp.Tracer(val, trace.WithSchemaURL(semconv.SchemaURL),
+				trace.WithInstrumentationVersion(otelhttp.SemVersion())).
+				Start(r.Context(), name, trace.WithSpanKind(trace.SpanKindServer))
 			defer span.End()
+
+			// inject
+			p.propagators.Inject(ctx, propagation.HeaderCarrier(r.Header))
 			r = r.WithContext(ctx)
 		}
 
-		// https://datatracker.ietf.org/doc/html/rfc7234#section-3.2
 		/*
+			https://www.cloudflare.com/en-gb/learning/access-management/what-is-mutual-tls/
 			we MUST NOT use a cached response to a request with an Authorization header field
 		*/
-		if w.Header().Get(auth) != "" {
+		if w.Header().Get(headers.Auth) != "" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		rq := p.getRq()
-		defer p.putRq(rq)
+		start := time.Now()
+
+		cc := p.rh.GetCC()
+		defer p.rh.PutCC(cc)
 
 		// cwe-117
-		cc := r.Header.Get(cacheControl)
-		cc = strings.ReplaceAll(cc, "\n", "")
-		cc = strings.ReplaceAll(cc, "\r", "")
+		cch := r.Header.Get(headers.CacheControl)
+		cch = strings.ReplaceAll(cch, "\n", "")
+		cch = strings.ReplaceAll(cch, "\r", "")
 
-		directives.ParseRequestCacheControl(cc, p.log, rq)
+		/*
+		   Cache-Control   = 1#cache-directive
+		   cache-directive = token [ "=" ( token / quoted-string ) ]
+		*/
+		directives.ParseRequestCacheControl(cch, p.log, cc)
 		// https://datatracker.ietf.org/doc/html/rfc7234#section-5.2.1.5
 		/*
 			The "no-store" request directive indicates that a cache MUST NOT
 			store any part of either this request or any response to it.
 		*/
-		if rq.NoCache {
+		if cc.NoCache {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -151,14 +143,12 @@ func (p *Plugin) Middleware(next http.Handler) http.Handler {
 			cacheable methods: https://www.rfc-editor.org/rfc/rfc7231#section-4.2.3 (GET, HEAD, POST (Responses to POST requests are only cacheable when they include explicit freshness information))
 		*/
 		case http.MethodGet:
-			p.handleGET(w, r, next, rq)
+			p.rh.GET(w, r, next, cc, start)
 			return
 		case http.MethodHead:
-			// TODO(rustatian): HEAD method is not supported
-			fallthrough
+			next.ServeHTTP(w, r)
 		case http.MethodPost:
-			// TODO(rustatian): POST method is not supported
-			fallthrough
+			next.ServeHTTP(w, r)
 		default:
 			// passthrough request to the worker for other methods
 			next.ServeHTTP(w, r)

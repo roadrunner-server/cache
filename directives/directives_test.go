@@ -3,6 +3,7 @@ package directives
 import (
 	"testing"
 
+	"github.com/roadrunner-server/cache/v2/requests"
 	"github.com/roadrunner-server/sdk/v2/utils"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -12,7 +13,7 @@ var noop = zap.NewNop() //nolint:gochecknoglobals
 
 func TestParseRequest(t *testing.T) {
 	cc := "foo=bar"
-	rq := &Req{}
+	rq := &requests.CacheControl{}
 	ParseRequestCacheControl(cc, noop, rq)
 
 	require.False(t, rq.NoCache)
@@ -24,7 +25,7 @@ func TestParseRequest(t *testing.T) {
 	require.Nil(t, rq.MaxStale)
 
 	cc = "max-age="
-	rq = &Req{}
+	rq = &requests.CacheControl{}
 	ParseRequestCacheControl(cc, noop, rq)
 
 	require.False(t, rq.NoCache)
@@ -36,7 +37,7 @@ func TestParseRequest(t *testing.T) {
 	require.Nil(t, rq.MaxStale)
 
 	cc = "max-age=100, max-stale=100, min-fresh=100, no-cache, no-transform, no-store, only-if-cached"
-	rq = &Req{}
+	rq = &requests.CacheControl{}
 	ParseRequestCacheControl(cc, noop, rq)
 
 	require.True(t, rq.NoCache)
@@ -48,7 +49,7 @@ func TestParseRequest(t *testing.T) {
 	require.Equal(t, utils.Uint64(100), rq.MaxAge)
 
 	cc = "public, max-age=15"
-	rq = &Req{}
+	rq = &requests.CacheControl{}
 	ParseRequestCacheControl(cc, noop, rq)
 
 	require.False(t, rq.NoCache)
@@ -61,10 +62,11 @@ func TestParseRequest(t *testing.T) {
 }
 
 // BenchmarkParseRequest-32    	 2172706	       542.6 ns/op	     376 B/op	      14 allocs/op
+// BenchmarkParseRequest-24    	 4333123	       294.1 ns/op	     136 B/op	       4 allocs/op
 // BAD, should not be allocations in that function. TODO(rustatian): rewrite with own lexer and tokenizer.
 func BenchmarkParseRequest(b *testing.B) {
 	cc := "max-age=100, max-stale=100, min-fresh=100, no-cache, no-transform, no-store, only-if-cached"
-	rq := &Req{}
+	rq := &requests.CacheControl{}
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
