@@ -3,12 +3,12 @@ module github.com/roadrunner-server/cache/v2
 go 1.18
 
 require (
-	github.com/roadrunner-server/api/v2 v2.17.1
+	github.com/roadrunner-server/api/v2 v2.18.0
 	github.com/roadrunner-server/endure v1.3.0
 	github.com/roadrunner-server/errors v1.1.2
 	github.com/roadrunner-server/sdk/v2 v2.15.0
 	github.com/stretchr/testify v1.7.2
-	go.buf.build/protocolbuffers/go/roadrunner-server/api v1.2.3
+	go.buf.build/protocolbuffers/go/roadrunner-server/api v1.2.5
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.32.0
 	go.opentelemetry.io/contrib/propagators/jaeger v1.7.0
 	go.opentelemetry.io/otel v1.7.0
