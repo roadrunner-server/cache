@@ -86,7 +86,9 @@ func (p *Plugin) Collects() []interface{} {
 func (p *Plugin) GetCacheBackend(_ endure.Named, cache cache.HTTPCacheFromConfig) {
 	var err error
 	p.cache, err = cache.FromConfig(p.log)
-	p.log.Error("cache construct", zap.Error(err))
+	if err != nil {
+		p.log.Error("cache construct", zap.Error(err))
+	}
 }
 
 func (p *Plugin) Middleware(next http.Handler) http.Handler {

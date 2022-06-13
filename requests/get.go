@@ -35,6 +35,7 @@ func NewRequestsHandler(cache cache.Cache, s *storage.Storage, log *zap.Logger) 
 		cache:   cache,
 		storage: s,
 		log:     log,
+		hs:      hasher.NewHasher(),
 
 		rspPool: sync.Pool{New: func() any {
 			return new(cacheV1beta.Response)
