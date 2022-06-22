@@ -60,8 +60,8 @@ func (s *Storage) storeGet(wr *writer.Writer, log *zap.Logger, cache cache.Cache
 	copy(payload.Data, wr.Data)
 
 	for k := range wr.HdrToSend {
-		for i := 0; i < len(wr.HdrToSend[k]); i++ {
-			payload.Headers[k].Value = wr.HdrToSend[k]
+		payload.Headers[k] = &cacheV1beta.HeaderValue{
+			Value: wr.HdrToSend[k],
 		}
 	}
 
