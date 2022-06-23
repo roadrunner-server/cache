@@ -6,7 +6,7 @@ require (
 	github.com/roadrunner-server/api/v2 v2.18.0
 	github.com/roadrunner-server/endure v1.3.0
 	github.com/roadrunner-server/errors v1.1.2
-	github.com/roadrunner-server/sdk/v2 v2.15.0
+	github.com/roadrunner-server/sdk/v2 v2.16.0
 	github.com/stretchr/testify v1.7.4
 	go.buf.build/protocolbuffers/go/roadrunner-server/api v1.2.5
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.32.0
