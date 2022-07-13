@@ -8,7 +8,7 @@ require (
 	github.com/roadrunner-server/errors v1.1.2
 	github.com/roadrunner-server/sdk/v2 v2.17.3
 	github.com/stretchr/testify v1.8.0
-	go.buf.build/protocolbuffers/go/roadrunner-server/api v1.2.5
+	go.buf.build/protocolbuffers/go/roadrunner-server/api v1.2.6
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.33.0
 	go.opentelemetry.io/contrib/propagators/jaeger v1.8.0
 	go.opentelemetry.io/otel v1.8.0
